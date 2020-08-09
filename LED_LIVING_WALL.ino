@@ -3,8 +3,10 @@
 #include <SoftwareSerial.h>
 
 /*
- * ATMETA328P pin mapping.
+ * ATMETA328PB pin mapping.
+ * NOTE: ATMETA328P has a different pinout than the ATMETA328PB!
  * 
+ * |-------------+------+--------------|
  * | Description | Pin* | Arduino Pin  |
  * |-------------+------+--------------|
  * | XTAL1       |   7  |         N/A  |
@@ -23,6 +25,7 @@
  * | Reset       |  29  |         N/A  |
  * | RX          |  30  |         N/A  |
  * | TX          |  31  |         N/A  |
+ * |-------------+------+--------------|
  * 
  * *) Pin means physical pin number.
 */
