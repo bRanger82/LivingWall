@@ -86,7 +86,17 @@ volatile bool runIt = false;
 // the CURRENT_VAL_PWM_OUTent output value for the OUTs
 volatile int CURRENT_VAL_PWM_OUT = 0;
 
+int CurrentSense_1 = 0;
+int CurrentSense_2 = 0;
+byte CurrentReadCounter = 0;
+bool LED_STRIP_ON = false;
 
+
+struct CurrentValues {
+    int Channel_One, Channel_Two;
+};
+
+struct CurrentValues readAnalogValues(void);
 byte getNumbersOfLEDs(void);
 void ShowPMWValue(void);
 void FadeStepDown(int value);
@@ -294,19 +304,55 @@ void FadeStepUp(int value)
   runIt = false;
 }
 
+struct CurrentValues readAnalogValues(void)
+{
+  struct CurrentValues tmp;
+  const int readCounterMax = 5;
+  tmp.Channel_One = 0;
+  tmp.Channel_Two = 0;
+  
+  for (int readCounter = 0; readCounter <= readCounterMax; readCounter++)
+  {
+    tmp.Channel_One += analogRead(SENSE_1);
+    tmp.Channel_Two += analogRead(SENSE_2);
+  }
+  tmp.Channel_One = tmp.Channel_One / readCounterMax;
+  tmp.Channel_Two = tmp.Channel_Two / readCounterMax;
+
+  return tmp;
+}
+
 // the loop function runs over and over again forever
 void loop() 
 {
   // need a break, need a kitk ... ahm delay :)
   delay(DELAY_LOOP_RUN);
+
+  if (LED_STRIP_ON)
+  {
+    if (++CurrentReadCounter > 250)
+    {
+      struct CurrentValues tmp = readAnalogValues();
+      if (CurrentSense_1 > tmp.Channel_One * 1.1)
+      {
+        mySerial.println(F("CH_ONE_CURR"));
+      }
+      if (CurrentSense_2 > tmp.Channel_Two * 1.1)
+      {
+        mySerial.println(F("CH_TWO_CURR"));
+      }
+      CurrentReadCounter = 0;
+    }
+  }
   
   if (irrecv.decode(&results)) 
   {
-    mySerial.print(F("RECEIVED_DATA:"));
+    mySerial.print(F("REC'D:"));
     mySerial.println(results.value);
     mySerial.flush();
     // store CURRENT_VAL_PWM_OUTent value, might be needed in future
     int newValue = CURRENT_VAL_PWM_OUT;
+    bool pmw_value_changed = true;
     switch(results.value)
     {
       // name your IR receiver code to your needs
@@ -329,8 +375,23 @@ void loop()
         FadeStepUp(PWM_MAX);
         break;
       default:
+        pmw_value_changed = false;
         printSenseValues();
         break;
+    }
+
+    if (pmw_value_changed)
+    {
+      struct CurrentValues changedCurrentValues = readAnalogValues();
+      CurrentSense_1 = changedCurrentValues.Channel_One;
+      CurrentSense_2 = changedCurrentValues.Channel_Two;
+      if (analogRead(PWM_OUT_1) == 0 && analogRead(PWM_OUT_2) == 0)
+      {
+        LED_STRIP_ON = false; 
+      } else 
+      {
+        LED_STRIP_ON = true;
+      }
     }
     
     // ready for receiving the next value
