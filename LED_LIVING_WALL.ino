@@ -4,7 +4,6 @@
 
 /*
  * ATMETA328PB pin mapping.
- * NOTE: ATMETA328P has a different pinout than the ATMETA328PB!
  * 
  * |-------------+------+--------------|
  * | Description | Pin* | Arduino Pin  |
@@ -30,128 +29,112 @@
  * *) Pin means physical pin number.
 */
 
+/*
+ * ASSIGN YOUR REQUIRED IR-CODES!
+ */
+// button on the remote control to set PWM output to MIN
+const unsigned long BTN_FADE_FULL_OFF = 551547150;
+// button on the remote control to decrease PWM output by CURRENT_VAL_PWM_OUT_STEP_DW
+const unsigned long BTN_FADE_STEP_OFF = 551489010;
+// button on the remote control to increase PWM output by CURRENT_VAL_PWM_OUT_STEP_UP
+const unsigned long BTN_FADE_STEP_ON = 551509410;
+// button on the remote control to set PWM output to MAX
+const unsigned long BTN_FADE_FULL_ON = 551514510;
+
+
+SoftwareSerial mySerial(0, 1); // RX, TX
 
 // the IR receiver read data pin
-#define RECV_PIN         3
+#define RECV_PIN                     3
 
 // define two different outputs, so each output could be controlled seperatly (in this sketch both are controlled the same way)
-#define PWM_OUT_1          5
-#define PWM_OUT_2          6
-#define SENSE_1            A1
-#define SENSE_2            A0
+#define PWM_OUT_1                    5
+#define PWM_OUT_2                    6
+#define SENSE_1                      A1 // CURRENT_VAL_PWM_OUTent sense value of PWM out channel 1
+#define SENSE_2                      A0 // CURRENT_VAL_PWM_OUTent sense value of PWM out channel 2
 
-#define LED_DATA_OUT       9
-#define NUM_LEDS           8
-#define LED_TYPE           WS2811
-#define COLOR_ORDER        RGB
-#define UPDATES_PER_SECOND 100
-#define BRIGHTNESS         7
+#define LED_DATA_OUT                 9
+#define NUM_LEDS                     8
+#define LED_TYPE                     WS2811
+#define COLOR_ORDER                  RGB
+#define UPDATES_PER_SECOND           100
+#define WS2812_BRIGHTNESS            7
+#define COLOR_ORDER                  RGB
 CRGB WS2812_LED[NUM_LEDS];
 
 // defines the parameters of this program (start value for the outputs, in- and decrease steps, ...)
-#define CURR_START     0  // AnalogWrite value when startup 
-#define PWM_MAX      250  // Maximum value for AnalogWrite (PWM to LED)
-#define PWM_MIN        0  // Minimum value for AnalogWrite (PWM to LED)
-#define CURR_INC_UP    1  // Step-up value (PWM to LED) 
-#define CURR_INC_DW    1  // Step-down value (PWM to LED)
-#define CURR_STEP_UP  25  // Increase value for Button fade-up 
-#define CURR_STEP_DW  25  // Decrease value for Button fade-down
-#define DELAY_STEP_UP 25  // Delay between fade-up (from current value to the new value, using steps given as CURR_STEP_UP)
-#define DELAY_STEP_DW 25  // Delay between fade-down (from current value to the new value, using steps given as CURR_STEP_DW)
-
+#define PWM_START_VALUE              0    // AnalogWrite value when startup 
+#define PWM_MAX                      250  // Maximum value for AnalogWrite (PWM to LED)
+#define PWM_MIN                      0    // Minimum value for AnalogWrite (PWM to LED)
+#define CURRENT_VAL_PWM_OUT_INC_UP   1    // Step-up value (PWM to LED)
+#define CURRENT_VAL_PWM_OUT_INC_DW   1    // Step-down value (PWM to LED)
+#define CURRENT_VAL_PWM_OUT_STEP_UP  25   // Increase value (new value) for fade-up if button pressed
+#define CURRENT_VAL_PWM_OUT_STEP_DW  25   // Decrease value (new value) for fade-down if button pressed
+#define DELAY_STEP_UP                25   // Delay between fade-up (from CURRENT_VAL_PWM_OUTent value to the new value, using steps given as CURRENT_VAL_PWM_OUT_STEP_UP)
+#define DELAY_STEP_DW                25   // Delay between fade-down (from CURRENT_VAL_PWM_OUTent value to the new value, using steps given as CURRENT_VAL_PWM_OUT_STEP_DW)
 
 // defines the delay length for each loop() run 
-#define DELAY_LOOP_RUN 50
+#define DELAY_LOOP_RUN 25
 
 // using library for receiving and processing IR signals
 IRrecv irrecv(RECV_PIN);
 decode_results results;
 
-// fast-back button on the remote control
-const unsigned long left = 551547150;
-// play button on the remote control
-const unsigned long leftMid = 551489010;
-// pause button on the remote control
-const unsigned long rightMid = 551509410;
-// fast-forward button on the remote control
-const unsigned long right = 551514510;
-
 // if a process is already running this variable is set to true (e.g. while lightUpSlow is running)
 // implemented, just in case a later implemented interrupt needs this status information
 volatile bool runIt = false;
-// the current output value for the OUTs
-volatile int curr = 0;
+// the CURRENT_VAL_PWM_OUTent output value for the OUTs
+volatile int CURRENT_VAL_PWM_OUT = 0;
 
-#define COLOR_ORDER RGB
 
 byte getNumbersOfLEDs(void);
 void ShowPMWValue(void);
 void FadeStepDown(int value);
 void FadeStepUp(int value);
 void printSenseValues(void);
-void sample_led(byte);
+void sample_led(void);
 
 /*Just to make sure everything is working - Test function for WS2812 */
-void sample_led(byte show_id = 0)
+void sample_led(void)
 {
-  if (0 == show_id)
-  {
-    for (int i = 0; i < NUM_LEDS; i++) 
-    {
-      if (i % 3 == 0)
-      {
-        WS2812_LED[i] = CRGB::Green;
-      } else if (i % 2 == 0)
-      {
-        WS2812_LED[i] = CRGB::Blue;
-      } else
-      {
-        WS2812_LED[i] = CRGB::Red;
-      }
-    }  
-  } else
-  {
-    for (int i = 0; i < NUM_LEDS; i++) 
-    {
-      if (i == (int)show_id)
-      {
-        WS2812_LED[i] = CRGB::Green;
-      } else
-      {
-        WS2812_LED[i] = CRGB::Black;
-      }
-    }
-  }
+  WS2812_LED[0] = CRGB::Red;
+  WS2812_LED[1] = CRGB::Orange;
+  WS2812_LED[2] = CRGB::Yellow;
+  WS2812_LED[3] = CRGB::Green;
+  WS2812_LED[4] = CRGB::Aqua;
+  WS2812_LED[5] = CRGB::Blue;
+  WS2812_LED[6] = CRGB::Purple;
+  WS2812_LED[7] = CRGB::Pink;
   
   FastLED.show();
-  
 }
-
-SoftwareSerial mySerial(0, 1); // RX, TX
 
 // the setup function runs once when you press reset or power the board
 void setup() 
 {
+  // Serial used in case of any issues
   mySerial.begin(9600);
   mySerial.println(F("PROJECT:LIVING_WALL_LED_CONTROLLER|VERSION:001|CREATOR:bRanger82"));
   mySerial.flush();
+  
   FastLED.addLeds<LED_TYPE, LED_DATA_OUT, COLOR_ORDER>(WS2812_LED, NUM_LEDS).setCorrection( TypicalLEDStrip );
-  FastLED.setBrightness(  BRIGHTNESS );
-  sample_led(0);
+  FastLED.setBrightness( WS2812_BRIGHTNESS );
+  // show awesome LED effect on startup
+  sample_led();
+  
   // activate IR receiver
   irrecv.enableIRIn(); // Start the receiver
   
-  // when turned on the value is 0
-  curr = CURR_START;
-  // Define pins, currently only PWM_OUT_2 is used
+  // set default PMW output value
+  CURRENT_VAL_PWM_OUT = PWM_START_VALUE;
+
+  // set pinMode and values for PWM output
   pinMode(PWM_OUT_1, OUTPUT);
   pinMode(PWM_OUT_2, OUTPUT);
-
-  analogWrite(PWM_OUT_1, curr);
-  analogWrite(PWM_OUT_2, curr);
+  analogWrite(PWM_OUT_1, CURRENT_VAL_PWM_OUT);
+  analogWrite(PWM_OUT_2, CURRENT_VAL_PWM_OUT);
 }
 
-// print PWM data and current-sensor resistor values via serial  
 void printSenseValues(void)
 {
   mySerial.print(F("PWM_OUT_1:"));
@@ -167,42 +150,45 @@ void printSenseValues(void)
 }
 
 /*
- * Based on the current PWM output value, it returns the number of LEDs (WS2812) to light up
- * If current PWM < 5 (so smaller than the minimum), 254 is return. As -1 does not work for type byte
+ * Based on the CURRENT_VAL_PWM_OUTent PWM output value, it returns the number of LEDs (WS2812) to light up
+ * If CURRENT_VAL_PWM_OUTent PWM < 5 (so smaller than the minimum), 254 is return. As -1 does not work for type byte
 */
 byte getNumbersOfLEDs(void)
 {
-  if (curr > 5 && curr < 32)
+  // as CURRENT_VAL_PWM_OUT stores a value between 0 and 255 --> calculate the number of 8 LEDs out of it
+  
+  if (CURRENT_VAL_PWM_OUT > 5 && CURRENT_VAL_PWM_OUT < 32)
   {
     return 1;  
-  } else if (curr >=32 && curr < 63)
+  } else if (CURRENT_VAL_PWM_OUT >=32 && CURRENT_VAL_PWM_OUT < 63)
   {
     return 2;
-  } else if (curr >= 63 && curr < 95)
+  } else if (CURRENT_VAL_PWM_OUT >= 63 && CURRENT_VAL_PWM_OUT < 95)
   {
     return 3;
-  } else if (curr >= 95 && curr < 127)
+  } else if (CURRENT_VAL_PWM_OUT >= 95 && CURRENT_VAL_PWM_OUT < 127)
   {
     return 4;
-  } else if (curr >= 127 && curr < 159)
+  } else if (CURRENT_VAL_PWM_OUT >= 127 && CURRENT_VAL_PWM_OUT < 159)
   {
     return 5;
-  } else if (curr >= 159 && curr < 191)
+  } else if (CURRENT_VAL_PWM_OUT >= 159 && CURRENT_VAL_PWM_OUT < 191)
   {
     return 6;
-  } else if (curr >= 191 && curr < 223)
+  } else if (CURRENT_VAL_PWM_OUT >= 191 && CURRENT_VAL_PWM_OUT < 223)
   {
     return 7;
-  } else if (curr >= 223)
+  } else if (CURRENT_VAL_PWM_OUT >= 223)
   {
     return 8;
   }
+  // 255 must  be set as data type byte cannot return -1
   return 255;
 }
 
 /*
  * For this project, an 8 WS2812 LEDs stip was used. 
- * Based on the current PWM output, the number of WS2812 are light up in different color. 
+ * Based on the CURRENT_VAL_PWM_OUTent PWM output, the number of WS2812 are light up in different color. 
  * E.g. 25 percent -> 2 LEDs of the WS2812 lights up
  *      50 percent -> 4 LEDs of the WS2812 lights up
 */
@@ -211,30 +197,51 @@ void ShowPMWValue(void)
   byte numberOfLEDs = getNumbersOfLEDs() - 1; // returns number of LEDs - 1 ==> index
   mySerial.print(F("numberOfLEDs:"));
   mySerial.println(numberOfLEDs);
+  
   for (byte i = 0; i < NUM_LEDS; i++) 
   {
     if (i <= numberOfLEDs && numberOfLEDs < NUM_LEDS)
     {
-      if (i % 3 == 0)
+      switch(i)
       {
-        WS2812_LED[i] = CRGB::Green;
-      } else if (i % 2 == 0)
-      {
-        WS2812_LED[i] = CRGB::Blue;
-      } else
-      {
-        WS2812_LED[i] = CRGB::Red;
-      }  
+        case 0:
+          WS2812_LED[i] = CRGB::Red;
+          break;
+        case 1: 
+          WS2812_LED[i] = CRGB::Orange;
+          break;
+        case 2:
+          WS2812_LED[i] = CRGB::Yellow;
+          break;
+        case 3:
+          WS2812_LED[i] = CRGB::Green;
+          break;
+        case 4:
+          WS2812_LED[i] = CRGB::Aqua;
+          break;
+        case 5:
+          WS2812_LED[i] = CRGB::Blue;
+          break;
+        case 6:
+          WS2812_LED[i] = CRGB::Purple;
+          break;
+        case 7:
+          WS2812_LED[i] = CRGB::Pink;
+          break;
+        default:
+          WS2812_LED[i] = CRGB::Black;
+          break;
+      }
     } else
     {
       WS2812_LED[i] = CRGB::Black;
     }
   }  
   FastLED.show();
-  
 }
+
 // FadeDown Function, increases light
-// value: the value to fadeDown to (e.g. value = 25 --> outputs will be decreased from curr -> 25)
+// value: the value to fadeDown to (e.g. value = 25 --> outputs will be decreased from CURRENT_VAL_PWM_OUT -> 25)
 void FadeStepDown(int value)
 {
   runIt = true;
@@ -246,13 +253,13 @@ void FadeStepDown(int value)
   if (ToValue < PWM_MIN) { ToValue = PWM_MIN; }
   if (ToValue > PWM_MAX) { ToValue = PWM_MAX; }
 
-  while(curr > ToValue)
+  while(CURRENT_VAL_PWM_OUT > ToValue)
   {
-    // change the time for delay and/or for increasing the value, to change the time until the min. brightness is reached
-    curr-=CURR_INC_DW;
+    // change the time for delay and/or for increasing the value, to change the time until the min. bBTN_FADE_FULL_ONness is reached
+    CURRENT_VAL_PWM_OUT-=CURRENT_VAL_PWM_OUT_INC_DW;
     
-    analogWrite(PWM_OUT_1, curr);
-    analogWrite(PWM_OUT_2, curr);
+    analogWrite(PWM_OUT_1, CURRENT_VAL_PWM_OUT);
+    analogWrite(PWM_OUT_2, CURRENT_VAL_PWM_OUT);
 
     ShowPMWValue();
     FastLED.delay(DELAY_STEP_DW);
@@ -261,7 +268,7 @@ void FadeStepDown(int value)
 }
 
 // FadeUp Function, increases light
-// value: the value to fadeUp to (e.g. value = 250 --> outputs will be increased from curr -> 250)
+// value: the value to fadeUp to (e.g. value = 250 --> outputs will be increased from CURRENT_VAL_PWM_OUT -> 250)
 void FadeStepUp(int value)
 {
   runIt = true;
@@ -273,13 +280,13 @@ void FadeStepUp(int value)
   if (ToValue < PWM_MIN) { ToValue = PWM_MIN; }
   if (ToValue > PWM_MAX) { ToValue = PWM_MAX; }
   
-  while(curr < ToValue)
+  while(CURRENT_VAL_PWM_OUT < ToValue)
   {
-    // change the time for delay and/or for increasing the value, to change the time until the max. brightness is reached
-    curr+=CURR_INC_UP;
+    // change the time for delay and/or for increasing the value, to change the time until the max. bBTN_FADE_FULL_ONness is reached
+    CURRENT_VAL_PWM_OUT+=CURRENT_VAL_PWM_OUT_INC_UP;
     
-    analogWrite(PWM_OUT_1, curr);
-    analogWrite(PWM_OUT_2, curr);
+    analogWrite(PWM_OUT_1, CURRENT_VAL_PWM_OUT);
+    analogWrite(PWM_OUT_2, CURRENT_VAL_PWM_OUT);
 
     ShowPMWValue();
     FastLED.delay(DELAY_STEP_UP);
@@ -298,26 +305,26 @@ void loop()
     mySerial.print(F("RECEIVED_DATA:"));
     mySerial.println(results.value);
     mySerial.flush();
-    // store current value, might be needed in future
-    int newValue = curr;
+    // store CURRENT_VAL_PWM_OUTent value, might be needed in future
+    int newValue = CURRENT_VAL_PWM_OUT;
     switch(results.value)
     {
       // name your IR receiver code to your needs
-      case left:
+      case BTN_FADE_FULL_OFF:
         // fade to minimum brightness
         FadeStepDown(PWM_MIN);
         break;
-      case leftMid:
-        // subtract the step down value to the current value 
-        newValue -= CURR_STEP_DW;
+      case BTN_FADE_STEP_OFF:
+        // reduce light by CURRENT_VAL_PWM_OUT_STEP_DW value
+        newValue -= CURRENT_VAL_PWM_OUT_STEP_DW;
         FadeStepDown(newValue);
         break;
-      case rightMid:
-        // add the step up value to the current value 
-        newValue += CURR_STEP_UP;
+      case BTN_FADE_STEP_ON:
+        // increase light by CURRENT_VAL_PWM_OUT_STEP_UP value
+        newValue += CURRENT_VAL_PWM_OUT_STEP_UP;
         FadeStepUp(newValue);
         break;
-      case right:
+      case BTN_FADE_FULL_ON:
         // fade to full brightness
         FadeStepUp(PWM_MAX);
         break;
