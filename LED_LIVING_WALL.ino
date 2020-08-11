@@ -103,6 +103,9 @@ void FadeStepDown(int value);
 void FadeStepUp(int value);
 void printSenseValues(void);
 void sample_led(void);
+void checkCurrentConsumption(void);
+void setDefaultCurrentValues(void);
+bool processIRData(unsigned long);
 
 /*Just to make sure everything is working - Test function for WS2812 */
 void sample_led(void)
@@ -147,13 +150,11 @@ void setup()
 
 void printSenseValues(void)
 {
-  mySerial.print(F("PWM_OUT_1:"));
-  mySerial.print(analogRead(PWM_OUT_1));
-  mySerial.print(F("|PWM_OUT_2:"));
-  mySerial.print(analogRead(PWM_OUT_2));
-  mySerial.print(F("|SENSE_1:"));
+  mySerial.print(F("PWM_1/2:"));
+  mySerial.print(CURRENT_VAL_PWM_OUT);
+  mySerial.print(F("|S_1:"));
   mySerial.print(analogRead(SENSE_1));
-  mySerial.print(F("|SENSE_2:"));
+  mySerial.print(F("|S_2:"));
   mySerial.print(analogRead(SENSE_2));
   mySerial.println("");
   mySerial.flush();
@@ -304,6 +305,13 @@ void FadeStepUp(int value)
   runIt = false;
 }
 
+/*
+ * 
+ * Based on the current running thru the shut resistors for the output channels, a voltage drop is created.
+ * This voltage drop is proportial to the current. 
+ * See schematic for more information (LM358 is used for the current sense reading).
+ * 
+ */
 struct CurrentValues readAnalogValues(void)
 {
   struct CurrentValues tmp;
@@ -322,76 +330,129 @@ struct CurrentValues readAnalogValues(void)
   return tmp;
 }
 
-// the loop function runs over and over again forever
+  /*
+   * If LED stip is turned ON (PMW > 0), then the current is read after the switch block for reading the IR codes.
+   * After some time, the LEDs warm up and the current is increasing. 
+   * To avoid higher current consumption (if PWM did not change), the PMW value for the affected channel has to be adapted.
+   * 
+   * E.g. if PWM is set to 50% and the current is measured -> default current
+   * After some on-time, the current of the LED strip increases as it gets warmer
+   * This code checks peroidically the actual current consumption 
+   * If (actual current consumption > default current * 1.1) => Then decrease PWM duty cycle (hte multiplier 1.1 is just an example to give a little bit of a range)
+   * If duty cycle is decreased, the actual current consumption is also decreased, it should get back to the default current consumption.
+   * 
+   */
+void checkCurrentConsumption(void)
+{
+  if (++CurrentReadCounter > 250)
+  {
+    struct CurrentValues tmp = readAnalogValues();
+    if (CurrentSense_1 > tmp.Channel_One * 1.1)
+    {
+      mySerial.println(F("CH_1_C"));
+      // TBD adapt duty cycle
+    }
+    if (CurrentSense_2 > tmp.Channel_Two * 1.1)
+    {
+      mySerial.println(F("CH_2_C"));
+      // TBD adapt duty cycle
+    }
+    CurrentReadCounter = 0;
+  } 
+}
+
+/*
+ * 
+ * Should be called after the final PWM values is set for the output channels.
+ * It sets the default (startup) current consumption for the LED strips.
+ * 
+ */
+void setDefaultCurrentValues(void)
+{
+  struct CurrentValues changedCurrentValues = readAnalogValues();
+  CurrentSense_1 = changedCurrentValues.Channel_One;
+  CurrentSense_2 = changedCurrentValues.Channel_Two;
+  if (CURRENT_VAL_PWM_OUT == 0 && CURRENT_VAL_PWM_OUT == 0)
+  {
+    LED_STRIP_ON = false; 
+    CurrentReadCounter = 0;
+  } else 
+  {
+    LED_STRIP_ON = true;
+  }
+}
+
+/*
+ * Process when IR code is received. 
+ * The main processíng happens here.
+ * 
+ * Return true, if the PWM value was changed. Otherwise false.
+ * 
+ */
+bool processIRData(unsigned long received_code)
+{
+  // store CURRENT_VAL_PWM_OUTent value, might be needed in future
+  int newValue = CURRENT_VAL_PWM_OUT;
+  bool pmw_value_changed = true;
+  switch(received_code)
+  {
+    // name your IR receiver code to your needs
+    case BTN_FADE_FULL_OFF:
+      // fade to minimum brightness
+      FadeStepDown(PWM_MIN);
+      break;
+    case BTN_FADE_STEP_OFF:
+      // reduce light by CURRENT_VAL_PWM_OUT_STEP_DW value
+      newValue -= CURRENT_VAL_PWM_OUT_STEP_DW;
+      FadeStepDown(newValue);
+      break;
+    case BTN_FADE_STEP_ON:
+      // increase light by CURRENT_VAL_PWM_OUT_STEP_UP value
+      newValue += CURRENT_VAL_PWM_OUT_STEP_UP;
+      FadeStepUp(newValue);
+      break;
+    case BTN_FADE_FULL_ON:
+      // fade to full brightness
+      FadeStepUp(PWM_MAX);
+      break;
+    default:
+      pmw_value_changed = false;
+      printSenseValues();
+      break;
+  }  
+  return pmw_value_changed;
+}
+
+// the loop function runs over and over again, forever and ever ...
 void loop() 
 {
   // need a break, need a kitk ... ahm delay :)
   delay(DELAY_LOOP_RUN);
 
+  /*
+   * If the LED strip is on (PWM duty cycle > 0%), check and adapt the current consumption by changing the PWM duty-cycle
+  */
   if (LED_STRIP_ON)
   {
-    if (++CurrentReadCounter > 250)
-    {
-      struct CurrentValues tmp = readAnalogValues();
-      if (CurrentSense_1 > tmp.Channel_One * 1.1)
-      {
-        mySerial.println(F("CH_ONE_CURR"));
-      }
-      if (CurrentSense_2 > tmp.Channel_Two * 1.1)
-      {
-        mySerial.println(F("CH_TWO_CURR"));
-      }
-      CurrentReadCounter = 0;
-    }
+    checkCurrentConsumption();
   }
-  
+
+  /*
+   * Process IR data if received
+   */
   if (irrecv.decode(&results)) 
   {
+    // For debugging only
     mySerial.print(F("REC'D:"));
     mySerial.println(results.value);
     mySerial.flush();
-    // store CURRENT_VAL_PWM_OUTent value, might be needed in future
-    int newValue = CURRENT_VAL_PWM_OUT;
-    bool pmw_value_changed = true;
-    switch(results.value)
+    
+    /*
+     * If the PWM value has changed, the default current values have to be read-out after the final PWM duty cycle was set.
+     */
+    if (processIRData(results.value))
     {
-      // name your IR receiver code to your needs
-      case BTN_FADE_FULL_OFF:
-        // fade to minimum brightness
-        FadeStepDown(PWM_MIN);
-        break;
-      case BTN_FADE_STEP_OFF:
-        // reduce light by CURRENT_VAL_PWM_OUT_STEP_DW value
-        newValue -= CURRENT_VAL_PWM_OUT_STEP_DW;
-        FadeStepDown(newValue);
-        break;
-      case BTN_FADE_STEP_ON:
-        // increase light by CURRENT_VAL_PWM_OUT_STEP_UP value
-        newValue += CURRENT_VAL_PWM_OUT_STEP_UP;
-        FadeStepUp(newValue);
-        break;
-      case BTN_FADE_FULL_ON:
-        // fade to full brightness
-        FadeStepUp(PWM_MAX);
-        break;
-      default:
-        pmw_value_changed = false;
-        printSenseValues();
-        break;
-    }
-
-    if (pmw_value_changed)
-    {
-      struct CurrentValues changedCurrentValues = readAnalogValues();
-      CurrentSense_1 = changedCurrentValues.Channel_One;
-      CurrentSense_2 = changedCurrentValues.Channel_Two;
-      if (analogRead(PWM_OUT_1) == 0 && analogRead(PWM_OUT_2) == 0)
-      {
-        LED_STRIP_ON = false; 
-      } else 
-      {
-        LED_STRIP_ON = true;
-      }
+      setDefaultCurrentValues();
     }
     
     // ready for receiving the next value
