@@ -131,7 +131,8 @@ void setup()
 {
   // Serial used in case of any issues
   mySerial.begin(9600);
-  mySerial.println(F("PROJECT:LIVING_WALL_LED_CONTROLLER|VERSION:001|CREATOR:bRanger82"));
+  mySerial.println(F("PROJECT:LIVING_WALL_LED_CONTROLLER|VERSION:002|CREATOR:bRanger82"));
+  mySerial.println(F("FILE:" __FILE__ "|DATE:" __DATE__ "|IR_LIB_VERSION:" VERSION_IRREMOTE));
   mySerial.flush();
   
   FastLED.addLeds<LED_TYPE, LED_DATA_OUT, COLOR_ORDER>(WS2812_LED, NUM_LEDS).setCorrection( TypicalLEDStrip );
