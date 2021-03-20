@@ -32,15 +32,23 @@
 /*
  * ASSIGN YOUR REQUIRED IR-CODES!
  */
-// button on the remote control to set PWM output to MIN
-const unsigned long BTN_FADE_FULL_OFF = 551547150;
-// button on the remote control to decrease PWM output by CURRENT_VAL_PWM_OUT_STEP_DW
-const unsigned long BTN_FADE_STEP_OFF = 551489010;
-// button on the remote control to increase PWM output by CURRENT_VAL_PWM_OUT_STEP_UP
-const unsigned long BTN_FADE_STEP_ON = 551509410;
-// button on the remote control to set PWM output to MAX
-const unsigned long BTN_FADE_FULL_ON = 551514510;
+// button on the LG TV remote control to set PWM output to MIN
+#define BTN_FADE_FULL_OFF 1888484100
+// button on the LG TV remote control to decrease PWM output by CURRENT_VAL_PWM_OUT_STEP_DW
+#define BTN_FADE_STEP_OFF 1336998660
+// button on the LG TV remote control to increase PWM output by CURRENT_VAL_PWM_OUT_STEP_UP
+#define BTN_FADE_STEP_ON  1169881860
+// button on the LG TV remote control to set PWM output to MAX
+#define BTN_FADE_FULL_ON  1905195780
 
+// button on the ARDUINO remote control to set PWM output to MIN (Button CH-)
+#define BTN_EXT_FADE_FULL_OFF 3125149440
+// button on the ARDUINO remote control to decrease PWM output by CURRENT_VAL_PWM_OUT_STEP_DW (Button -)
+#define BTN_EXT_FADE_STEP_OFF 4161273600
+// button on the ARDUINO remote control to increase PWM output by CURRENT_VAL_PWM_OUT_STEP_UP (Button +)
+#define BTN_EXT_FADE_STEP_ON  3927310080
+// button on the ARDUINO remote control to set PWM output to MAX (Button CH+)
+#define BTN_EXT_FADE_FULL_ON  3091726080
 
 SoftwareSerial mySerial(0, 1); // RX, TX
 
@@ -76,10 +84,6 @@ CRGB WS2812_LED[NUM_LEDS];
 // defines the delay length for each loop() run 
 #define DELAY_LOOP_RUN 25
 
-// using library for receiving and processing IR signals
-IRrecv irrecv(RECV_PIN);
-decode_results results;
-
 // if a process is already running this variable is set to true (e.g. while lightUpSlow is running)
 // implemented, just in case a later implemented interrupt needs this status information
 volatile bool runIt = false;
@@ -105,7 +109,7 @@ void printSenseValues(void);
 void sample_led(void);
 void checkCurrentConsumption(void);
 void setDefaultCurrentValues(void);
-bool processIRData(unsigned long);
+bool processIRData(uint32_t);
 
 /*Just to make sure everything is working - Test function for WS2812 */
 void sample_led(void)
@@ -136,7 +140,7 @@ void setup()
   sample_led();
   
   // activate IR receiver
-  irrecv.enableIRIn(); // Start the receiver
+  IrReceiver.begin(RECV_PIN, DISABLE_LED_FEEDBACK);
   
   // set default PMW output value
   CURRENT_VAL_PWM_OUT = PWM_START_VALUE;
@@ -389,7 +393,7 @@ void setDefaultCurrentValues(void)
  * Return true, if the PWM value was changed. Otherwise false.
  * 
  */
-bool processIRData(unsigned long received_code)
+bool processIRData(uint32_t received_code)
 {
   // store CURRENT_VAL_PWM_OUTent value, might be needed in future
   int newValue = CURRENT_VAL_PWM_OUT;
@@ -397,20 +401,24 @@ bool processIRData(unsigned long received_code)
   switch(received_code)
   {
     // name your IR receiver code to your needs
+    case BTN_EXT_FADE_FULL_OFF:
     case BTN_FADE_FULL_OFF:
       // fade to minimum brightness
       FadeStepDown(PWM_MIN);
       break;
+    case BTN_EXT_FADE_STEP_OFF:
     case BTN_FADE_STEP_OFF:
       // reduce light by CURRENT_VAL_PWM_OUT_STEP_DW value
       newValue -= CURRENT_VAL_PWM_OUT_STEP_DW;
       FadeStepDown(newValue);
       break;
+    case BTN_EXT_FADE_STEP_ON:
     case BTN_FADE_STEP_ON:
       // increase light by CURRENT_VAL_PWM_OUT_STEP_UP value
       newValue += CURRENT_VAL_PWM_OUT_STEP_UP;
       FadeStepUp(newValue);
       break;
+    case BTN_EXT_FADE_FULL_ON:
     case BTN_FADE_FULL_ON:
       // fade to full brightness
       FadeStepUp(PWM_MAX);
@@ -440,22 +448,22 @@ void loop()
   /*
    * Process IR data if received
    */
-  if (irrecv.decode(&results)) 
+  if (IrReceiver.decode()) 
   {
     // For debugging only
     mySerial.print(F("REC'D:"));
-    mySerial.println(results.value);
+    mySerial.println(IrReceiver.decodedIRData.decodedRawData);
     mySerial.flush();
     
     /*
      * If the PWM value has changed, the default current values have to be read-out after the final PWM duty cycle was set.
      */
-    if (processIRData(results.value))
+    if (processIRData(IrReceiver.decodedIRData.decodedRawData))
     {
       setDefaultCurrentValues();
     }
     
     // ready for receiving the next value
-    irrecv.resume(); // Receive the next value
+    IrReceiver.resume(); // Receive the next value
   }
 }
