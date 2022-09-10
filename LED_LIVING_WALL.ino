@@ -1,6 +1,7 @@
 #include <IRremote.h>
 #include <FastLED.h>
 #include <SoftwareSerial.h>
+#include <EEPROM.h>
 
 /*
  * ATMETA328PB pin mapping.
@@ -32,6 +33,20 @@
 /*
  * ASSIGN YOUR REQUIRED IR-CODES!
  */
+
+struct TV_REMOTE_CTRL {
+  uint32_t TV_FULL_OFF;
+  uint32_t TV_STEP_OFF;
+  uint32_t TV_STEP_ON;
+  uint32_t TV_FULL_ON;
+  bool IsValid;
+};
+
+#define TV_CODES_EEPROM_ADDR   0
+
+struct TV_REMOTE_CTRL tv_remote_ctrl;
+struct TV_REMOTE_CTRL tv_remote_new;
+
 // button on the LG TV remote control to set PWM output to MIN
 #define BTN_FADE_FULL_OFF 1888484100
 // button on the LG TV remote control to decrease PWM output by CURRENT_VAL_PWM_OUT_STEP_DW
@@ -55,19 +70,20 @@ SoftwareSerial mySerial(0, 1); // RX, TX
 // the IR receiver read data pin
 #define RECV_PIN                     3
 
+#define PROGRAMMING_PIN              8
+
 // define two different outputs, so each output could be controlled seperatly (in this sketch both are controlled the same way)
 #define PWM_OUT_1                    5
 #define PWM_OUT_2                    6
-#define SENSE_1                      A1 // CURRENT_VAL_PWM_OUTent sense value of PWM out channel 1
-#define SENSE_2                      A0 // CURRENT_VAL_PWM_OUTent sense value of PWM out channel 2
+#define SENSE_1                      A1 // CURRENT_VAL_PWM_OUT sense value of PWM out channel 1
+#define SENSE_2                      A0 // CURRENT_VAL_PWM_OUT sense value of PWM out channel 2
 
 #define LED_DATA_OUT                 9
 #define NUM_LEDS                     8
 #define LED_TYPE                     WS2811
-#define COLOR_ORDER                  RGB
+#define COLOR_ORDER                  GRB
 #define UPDATES_PER_SECOND           100
 #define WS2812_BRIGHTNESS            7
-#define COLOR_ORDER                  RGB
 CRGB WS2812_LED[NUM_LEDS];
 
 // defines the parameters of this program (start value for the outputs, in- and decrease steps, ...)
@@ -90,40 +106,166 @@ volatile bool runIt = false;
 // the CURRENT_VAL_PWM_OUTent output value for the OUTs
 volatile int CURRENT_VAL_PWM_OUT = 0;
 
+int GetCurrentPWM(int Channel) // Channel not used for now, but could be in future 
+{
+  return CURRENT_VAL_PWM_OUT;
+}
+
 int CurrentSense_1 = 0;
 int CurrentSense_2 = 0;
 byte CurrentReadCounter = 0;
+byte ProgrammingIndex = 0;
 bool LED_STRIP_ON = false;
-
+bool IsProgrammingMode = false;
 
 struct CurrentValues {
     int Channel_One, Channel_Two;
 };
 
-struct CurrentValues readAnalogValues(void);
+void LightUpLED(unsigned int Index, bool AllOff = false);
+void ShowAnimation(bool);
+void InitADC(void);
+void printSenseValues(void);
 byte getNumbersOfLEDs(void);
 void ShowPMWValue(void);
-void FadeStepDown(int value);
-void FadeStepUp(int value);
-void printSenseValues(void);
-void sample_led(void);
+void FadeStepDown(int);
+void FadeStepUp(int);
+int sort_desc(const void *cmp1, const void *cmp2);
+struct TV_REMOTE_CTRL GetTVCodesEEPROM(void);
+void SetTVCodesEEPROM(struct TV_REMOTE_CTRL);
+bool LoadTVCodesFromEEPROM(void);
+struct CurrentValues readAnalogValues(void);
 void checkCurrentConsumption(void);
 void setDefaultCurrentValues(void);
 bool processIRData(uint32_t);
+void ProgramSet(uint32_t);
+void ProcessSerialInput(void);
 
-/*Just to make sure everything is working - Test function for WS2812 */
-void sample_led(void)
+
+/*
+ * Lights up only one specific LED of the LED strip.
+ * The Index value indicates which LED should be turned on while others remains off.
+ * If AllOff is set to true, the Index value is ignored and ALL LEDs are turned off.
+ */
+void LightUpLED(unsigned int Index, bool AllOff = false)
 {
-  WS2812_LED[0] = CRGB::Red;
-  WS2812_LED[1] = CRGB::Orange;
-  WS2812_LED[2] = CRGB::Yellow;
-  WS2812_LED[3] = CRGB::Green;
-  WS2812_LED[4] = CRGB::Aqua;
-  WS2812_LED[5] = CRGB::Blue;
-  WS2812_LED[6] = CRGB::Purple;
-  WS2812_LED[7] = CRGB::Pink;
+  CRGB Colors[8] = { CRGB::Red, CRGB::Orange, CRGB::Yellow, CRGB::Green, CRGB::Aqua, CRGB::Blue, CRGB::Purple, CRGB::Pink };
+
+  for (int Idx = 0; Idx < NUM_LEDS; Idx++)
+  {
+    if (Idx == Index && !AllOff)
+    {
+        WS2812_LED[Idx] = Colors[Idx];
+    } else
+    {
+      WS2812_LED[Idx] = CRGB::Black;
+    }
+  }
+  FastLED.show();    
+  delay(100);
+}
+
+/*
+ * Just to make sure everything is working - Test function for WS2812 
+ * 
+ * Startup animation which can be changed as you wish. 
+ * 
+ * If OkState is set to true, a short "green" blink at the end of the animation indicates that every works as expected. Otherwise a short red blink is done.
+ * 
+ */
+void ShowAnimation(bool OkState)
+{
+  CRGB Colors[8] = { CRGB::Red, CRGB::Orange, CRGB::Yellow, CRGB::Green, CRGB::Aqua, CRGB::Blue, CRGB::Purple, CRGB::Pink };
   
-  FastLED.show();
+  for (int Current = 0; Current < NUM_LEDS; Current++)
+  {
+    for (int Idx = 0; Idx < NUM_LEDS; Idx++)
+    {
+      if (Idx == Current)
+      {
+          WS2812_LED[Idx] = Colors[Idx];
+      } else
+      {
+        WS2812_LED[Idx] = CRGB::Black;
+      }
+    }
+    FastLED.show();    
+    delay(100);
+  }
+
+  for (int Current = NUM_LEDS - 1; Current >= 0; Current--)
+  {
+    for (int Idx = 0; Idx < NUM_LEDS; Idx++)
+    {
+      if (Idx == Current)
+      {
+          WS2812_LED[Idx] = Colors[Idx];
+      } else
+      {
+        WS2812_LED[Idx] = CRGB::Black;
+      }
+    }
+    FastLED.show();    
+    delay(100);
+  }    
+  
+  for (int Current = 0; Current < NUM_LEDS; Current++)
+  {
+    WS2812_LED[Current] = CRGB::Black;
+    FastLED.show();    
+  }  
+
+  delay(100);
+
+  if (!OkState)
+  {
+    WS2812_LED[0] = CRGB::Red;
+    WS2812_LED[NUM_LEDS - 1] = CRGB::Red;
+    FastLED.show();   
+    return;
+  }
+
+  WS2812_LED[0] = CRGB::Green;
+  WS2812_LED[NUM_LEDS - 1] = CRGB::Green;
+  FastLED.show();   
+  
+  delay(100);
+  
+  WS2812_LED[0] = CRGB::Black;
+  WS2812_LED[NUM_LEDS - 1] = CRGB::Black;
+  FastLED.show(); 
+
+  delay(100);
+}
+
+/*
+ * Enables and setup the ADC (sets reference voltage and prescaler value).
+ */
+void InitADC(void)
+{
+  /*
+   * REFS1  REFS0   Referenz
+   * 0      0       externe Referenz
+   * 0      1       interne Referenz: Avcc
+   * 1      0       wird beim Mega8 nicht benutzt
+   * 1      1       interne Referenz: 2.56 Volt 
+  */
+  // Select Vref=AVcc
+  ADMUX |= (1<<REFS0)|(1<<REFS1);
+
+  /*
+   *   ADPS2   ADPS1   ADPS0   Vorteiler
+   *   0       0       0         2
+   *   0       0       1         2
+   *   0       1       0         4
+   *   0       1       1         8
+   *   1       0       0        16
+   *   1       0       1        32
+   *   1       1       0        64
+   *   1       1       1       128
+  */
+  //Set prescaller to 128 and enable ADC 
+  ADCSRA |= (1<<ADPS2)|(1<<ADPS1)|(0<<ADPS0)|(1<<ADEN);    
 }
 
 // the setup function runs once when you press reset or power the board
@@ -137,22 +279,39 @@ void setup()
   
   FastLED.addLeds<LED_TYPE, LED_DATA_OUT, COLOR_ORDER>(WS2812_LED, NUM_LEDS).setCorrection( TypicalLEDStrip );
   FastLED.setBrightness( WS2812_BRIGHTNESS );
-  // show awesome LED effect on startup
-  sample_led();
-  
+
   // activate IR receiver
   IrReceiver.begin(RECV_PIN, DISABLE_LED_FEEDBACK);
   
   // set default PMW output value
   CURRENT_VAL_PWM_OUT = PWM_START_VALUE;
 
+  pinMode(PROGRAMMING_PIN, INPUT);
+
   // set pinMode and values for PWM output
-  pinMode(PWM_OUT_1, OUTPUT);
-  pinMode(PWM_OUT_2, OUTPUT);
+  digitalWrite(PWM_OUT_1, LOW);
+  digitalWrite(PWM_OUT_2, LOW);
+    
   analogWrite(PWM_OUT_1, CURRENT_VAL_PWM_OUT);
   analogWrite(PWM_OUT_2, CURRENT_VAL_PWM_OUT);
+  
+  pinMode(PWM_OUT_1, OUTPUT);
+  pinMode(PWM_OUT_2, OUTPUT);
+
+  InitADC();
+
+  bool LoadState = LoadTVCodesFromEEPROM();
+
+  if (!IsProgrammingMode)
+  {
+    // show awesome LED effect on startup
+    ShowAnimation(true);    
+  }
 }
 
+/*
+ * Purpose: for debugging only. Showing the actual read current values on the RS232 interface.
+ */
 void printSenseValues(void)
 {
   mySerial.print(F("PWM_1/2:"));
@@ -254,6 +413,8 @@ void ShowPMWValue(void)
     }
   }  
   FastLED.show();
+
+  delay(50);
 }
 
 // FadeDown Function, increases light
@@ -310,6 +471,91 @@ void FadeStepUp(int value)
   runIt = false;
 }
 
+// qsort requires you to create a sort function
+int sort_desc(const void *cmp1, const void *cmp2)
+{
+  // Need to cast the void * to int *
+  int a = *((int *)cmp1);
+  int b = *((int *)cmp2);
+  // The comparison
+  return a > b ? -1 : (a < b ? 1 : 0);
+  // A simpler, probably faster way:
+  //return b - a;
+}
+
+/*
+ * 
+ * Reads the Codes from the EEPROM of the microcontroller. 
+ * 
+ * If the codes are valid (have been saved before), the IsValid flag is set to true. 
+ * So, each time, when this method is called, you should check the IsValid flag.
+ * 
+ */
+struct TV_REMOTE_CTRL GetTVCodesEEPROM(void)
+{
+  struct TV_REMOTE_CTRL Codes; //Variable to store custom object read from EEPROM.
+  
+  EEPROM.get(TV_CODES_EEPROM_ADDR, Codes);
+  
+  if (Codes.TV_FULL_OFF == 0xFFFFFFFF || Codes.TV_STEP_OFF == 0xFFFFFFFF || Codes.TV_STEP_ON == 0xFFFFFFFF || Codes.TV_FULL_ON == 0xFFFFFFFF)
+  {
+    Codes.IsValid = false;
+  } else if (Codes.TV_FULL_OFF == 0 || Codes.TV_STEP_OFF == 0 || Codes.TV_STEP_ON == 0 || Codes.TV_FULL_ON == 0)
+  {
+    Codes.IsValid = false;
+  } else
+  {
+    Codes.IsValid = true;
+  }
+  
+  return Codes;
+}
+
+/*
+ * Saves the set Codes (parameter) into the EEPROM of the microcontroller
+ */
+void SetTVCodesEEPROM(struct TV_REMOTE_CTRL Codes)
+{
+  EEPROM.put(TV_CODES_EEPROM_ADDR, Codes);
+  delay(100);
+}
+
+/*
+ * Loads the saved TV codes from the EEPROM into the local tv_remote_ctrl structure.
+ * If not programmed (IsValid flag is used), it enteres the programming mode.
+ */
+bool LoadTVCodesFromEEPROM(void)
+{
+  tv_remote_ctrl = GetTVCodesEEPROM();
+
+  Serial.println(F("Read custom object from EEPROM: "));
+  Serial.print(F("TV_FULL_OFF: "));
+  Serial.println(tv_remote_ctrl.TV_FULL_OFF);
+  Serial.print(F("TV_STEP_OFF: "));
+  Serial.println(tv_remote_ctrl.TV_STEP_OFF);
+  Serial.print(F("TV_STEP_ON: "));
+  Serial.println(tv_remote_ctrl.TV_STEP_ON);
+  Serial.print(F("TV_FULL_ON: "));
+  Serial.println(tv_remote_ctrl.TV_FULL_ON);
+  Serial.println(F("Done reading from EEPROM"));
+
+  if (!tv_remote_ctrl.IsValid)
+  {
+    IsProgrammingMode = true;
+    LightUpLED(0);
+    return false;
+  }  
+
+  if (digitalRead(PROGRAMMING_PIN) == LOW && !IsProgrammingMode)
+  {
+    IsProgrammingMode = true;
+    LightUpLED(0);
+    return false;
+  }
+
+  return true;
+}
+
 /*
  * 
  * Based on the current running thru the shut resistors for the output channels, a voltage drop is created.
@@ -320,50 +566,47 @@ void FadeStepUp(int value)
 struct CurrentValues readAnalogValues(void)
 {
   struct CurrentValues tmp;
-  const int readCounterMax = 5;
-  tmp.Channel_One = 0;
-  tmp.Channel_Two = 0;
-  
-  for (int readCounter = 0; readCounter <= readCounterMax; readCounter++)
+  const int ArraySize = 5;
+  int SENSE_1_VALUES[ArraySize] = {0};
+  int SENSE_2_VALUES[ArraySize] = {0};
+  for(int Counter = 0; Counter < ArraySize; Counter++)
   {
-    tmp.Channel_One += analogRead(SENSE_1);
-    tmp.Channel_Two += analogRead(SENSE_2);
+    SENSE_1_VALUES[Counter] = analogRead(SENSE_1);
+    delay(2);
+    SENSE_2_VALUES[Counter] = analogRead(SENSE_2);
+    delay(2);
   }
-  tmp.Channel_One = tmp.Channel_One / readCounterMax;
-  tmp.Channel_Two = tmp.Channel_Two / readCounterMax;
+
+  int lt_length = sizeof(SENSE_1_VALUES) / sizeof(SENSE_1_VALUES[0]);
+  qsort(SENSE_1_VALUES, lt_length, sizeof(SENSE_1_VALUES[0]), sort_desc);
+  qsort(SENSE_2_VALUES, lt_length, sizeof(SENSE_2_VALUES[0]), sort_desc);
+
+  tmp.Channel_One = SENSE_1_VALUES[lt_length / 2];
+  tmp.Channel_Two = SENSE_2_VALUES[lt_length / 2];
+  
+  mySerial.print("1: ");
+  mySerial.print(tmp.Channel_One);
+  mySerial.print(", 2: ");
+  mySerial.println(tmp.Channel_Two);
 
   return tmp;
 }
 
-  /*
-   * If LED stip is turned ON (PMW > 0), then the current is read after the switch block for reading the IR codes.
-   * After some time, the LEDs warm up and the current is increasing. 
-   * To avoid higher current consumption (if PWM did not change), the PMW value for the affected channel has to be adapted.
-   * 
-   * E.g. if PWM is set to 50% and the current is measured -> default current
-   * After some on-time, the current of the LED strip increases as it gets warmer
-   * This code checks peroidically the actual current consumption 
-   * If (actual current consumption > default current * 1.1) => Then decrease PWM duty cycle (hte multiplier 1.1 is just an example to give a little bit of a range)
-   * If duty cycle is decreased, the actual current consumption is also decreased, it should get back to the default current consumption.
-   * 
-   */
+/*
+ * If LED stip is turned ON (PMW > 0), then the current is read after the switch block for reading the IR codes.
+ * After some time, the LEDs warm up and the current is increasing. 
+ * To avoid higher current consumption (if PWM did not change), the PMW value for the affected channel has to be adapted.
+ * 
+ * E.g. if PWM is set to 50% and the current is measured -> default current
+ * After some on-time, the current of the LED strip increases as it gets warmer
+ * This code checks peroidically the actual current consumption 
+ * If (actual current consumption > default current * 1.1) => Then decrease PWM duty cycle (hte multiplier 1.1 is just an example to give a little bit of a range)
+ * If duty cycle is decreased, the actual current consumption is also decreased, it should get back to the default current consumption.
+ * 
+ */
 void checkCurrentConsumption(void)
 {
-  if (++CurrentReadCounter > 250)
-  {
-    struct CurrentValues tmp = readAnalogValues();
-    if (CurrentSense_1 > tmp.Channel_One * 1.1)
-    {
-      mySerial.println(F("CH_1_C"));
-      // TBD adapt duty cycle
-    }
-    if (CurrentSense_2 > tmp.Channel_Two * 1.1)
-    {
-      mySerial.println(F("CH_2_C"));
-      // TBD adapt duty cycle
-    }
-    CurrentReadCounter = 0;
-  } 
+  // TODO
 }
 
 /*
@@ -398,70 +641,139 @@ bool processIRData(uint32_t received_code)
 {
   // store CURRENT_VAL_PWM_OUTent value, might be needed in future
   int newValue = CURRENT_VAL_PWM_OUT;
-  bool pmw_value_changed = true;
-  switch(received_code)
+
+  if (received_code == BTN_EXT_FADE_FULL_OFF || received_code == tv_remote_ctrl.TV_FULL_OFF)
   {
-    // name your IR receiver code to your needs
-    case BTN_EXT_FADE_FULL_OFF:
-    case BTN_FADE_FULL_OFF:
-      // fade to minimum brightness
-      FadeStepDown(PWM_MIN);
-      break;
-    case BTN_EXT_FADE_STEP_OFF:
-    case BTN_FADE_STEP_OFF:
-      // reduce light by CURRENT_VAL_PWM_OUT_STEP_DW value
-      newValue -= CURRENT_VAL_PWM_OUT_STEP_DW;
-      FadeStepDown(newValue);
-      break;
-    case BTN_EXT_FADE_STEP_ON:
-    case BTN_FADE_STEP_ON:
-      // increase light by CURRENT_VAL_PWM_OUT_STEP_UP value
-      newValue += CURRENT_VAL_PWM_OUT_STEP_UP;
-      FadeStepUp(newValue);
-      break;
-    case BTN_EXT_FADE_FULL_ON:
-    case BTN_FADE_FULL_ON:
-      // fade to full brightness
-      FadeStepUp(PWM_MAX);
-      break;
-    default:
-      pmw_value_changed = false;
-      printSenseValues();
-      break;
-  }  
-  return pmw_value_changed;
+    FadeStepDown(PWM_MIN);
+    return true;
+  }
+
+  if (received_code == BTN_EXT_FADE_STEP_OFF || received_code == tv_remote_ctrl.TV_STEP_OFF)
+  {
+    // reduce light by CURRENT_VAL_PWM_OUT_STEP_DW value
+    newValue -= CURRENT_VAL_PWM_OUT_STEP_DW;
+    FadeStepDown(newValue);
+    return true;
+  } 
+
+  if (received_code == BTN_EXT_FADE_STEP_ON || received_code == tv_remote_ctrl.TV_STEP_ON)
+  {
+    // increase light by CURRENT_VAL_PWM_OUT_STEP_UP value
+    newValue += CURRENT_VAL_PWM_OUT_STEP_UP;
+    FadeStepUp(newValue);
+    return true;
+  }
+
+  if (received_code == BTN_EXT_FADE_FULL_ON || received_code == tv_remote_ctrl.TV_FULL_ON)
+  {
+    FadeStepUp(PWM_MAX);
+    return true;
+  }
+
+  printSenseValues();
+  return false;
 }
 
-// the loop function runs over and over again, forever and ever ...
+/*
+ * Program the new values into the EEPROM.
+ */
+void ProgramSet(uint32_t RawData)
+{
+  switch(ProgrammingIndex)
+  {
+    case 0:
+      tv_remote_new.TV_FULL_OFF = RawData;
+      delay(2000);
+      if (IrReceiver.decode()) 
+        IrReceiver.resume();
+      LightUpLED((NUM_LEDS / 2) - 1);
+      ProgrammingIndex++;
+      break;
+    case 1:
+      tv_remote_new.TV_STEP_OFF = RawData;
+      delay(2000);
+      if (IrReceiver.decode()) 
+        IrReceiver.resume();
+      LightUpLED((NUM_LEDS / 2) + 1);
+      ProgrammingIndex++;
+      break;
+    case 2:
+      tv_remote_new.TV_STEP_ON = RawData;
+      delay(2000);
+      if (IrReceiver.decode()) 
+        IrReceiver.resume();
+      LightUpLED(NUM_LEDS - 1);
+      ProgrammingIndex++;
+      break;
+    case 3:
+      tv_remote_new.TV_FULL_ON = RawData;
+      delay(50);   
+      IsProgrammingMode = false;
+      ProgrammingIndex = 0;
+      SetTVCodesEEPROM(tv_remote_new);
+      delay(50);
+      tv_remote_ctrl = GetTVCodesEEPROM();
+      delay(50);
+      ShowAnimation(tv_remote_new.IsValid);
+      delay(50);
+      if (IrReceiver.decode()) 
+        IrReceiver.resume();
+      delay(50);
+      break;
+    default:
+      IsProgrammingMode = false;
+      ProgrammingIndex = 0;
+  }
+}
+
+/*
+ * Process RS232 input
+ */
+void ProcessSerialInput(void)
+{
+  if (mySerial.available() > 0)
+  {
+    char c = mySerial.read();
+
+    if (c == '1')
+    {
+      printSenseValues();
+    }
+    
+    mySerial.flush();
+  }
+}
+
+/*
+ * The loop function runs over and over again, forever and ever ...
+ */ 
 void loop() 
 {
   // need a break, need a kitk ... ahm delay :)
   delay(DELAY_LOOP_RUN);
 
-  /*
-   * If the LED strip is on (PWM duty cycle > 0%), check and adapt the current consumption by changing the PWM duty-cycle
-  */
-  if (LED_STRIP_ON)
-  {
-    checkCurrentConsumption();
-  }
-
+  ProcessSerialInput();
+  
   /*
    * Process IR data if received
    */
   if (IrReceiver.decode()) 
   {
-    // For debugging only
-    mySerial.print(F("REC'D:"));
-    mySerial.println(IrReceiver.decodedIRData.decodedRawData);
-    mySerial.flush();
+    uint32_t RawData = IrReceiver.decodedIRData.decodedRawData;
     
-    /*
-     * If the PWM value has changed, the default current values have to be read-out after the final PWM duty cycle was set.
-     */
-    if (processIRData(IrReceiver.decodedIRData.decodedRawData))
+    mySerial.print(F("REC'D:"));
+    mySerial.println(RawData);
+    mySerial.flush();
+
+    if (IsProgrammingMode)
     {
-      setDefaultCurrentValues();
+      ProgramSet(RawData);
+    } else
+    {
+      if (processIRData(RawData))
+      {
+        setDefaultCurrentValues();
+      }
     }
     
     // ready for receiving the next value
